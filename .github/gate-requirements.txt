@@ -1,0 +1,5 @@
+# CI gate dependencies
+lizard>=1.17
+semgrep>=1.68
+coverage[toml]>=7.4
+pytest>=8.0

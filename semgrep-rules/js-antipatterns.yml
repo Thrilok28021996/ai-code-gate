@@ -1,0 +1,254 @@
+rules:
+
+  # -------------------------------------------------------------------------
+  # Error handling anti-patterns
+  # -------------------------------------------------------------------------
+
+  - id: empty-catch-block-js
+    pattern: |
+      try {
+        ...
+      } catch ($E) {}
+    message: >
+      Empty catch block silently swallows errors — a very common AI-generated
+      pattern. Log the error or re-throw it after handling.
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      category: error-handling
+      ai-risk: high
+
+  - id: catch-and-console-only-js
+    pattern: |
+      try {
+        ...
+      } catch ($E) {
+        console.log(...);
+      }
+    message: >
+      Catch block only logs to console without re-throwing or proper handling.
+      AI models frequently produce this pattern. Use a structured logger and
+      consider whether the error should propagate.
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      category: error-handling
+      ai-risk: medium
+
+  - id: promise-catch-missing
+    patterns:
+      - pattern: $PROMISE.then(...)
+      - pattern-not: $PROMISE.then(...).catch(...)
+      - pattern-not: $PROMISE.then(...).catch(...).finally(...)
+    message: >
+      Promise .then() without a .catch() handler. Unhandled promise rejections
+      crash Node.js processes. AI models often forget to add error handlers.
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      category: error-handling
+      ai-risk: high
+
+  # -------------------------------------------------------------------------
+  # Security anti-patterns
+  # -------------------------------------------------------------------------
+
+  - id: eval-usage
+    patterns:
+      - pattern: eval(...)
+      - pattern: new Function(...)
+    message: >
+      eval() and new Function() execute arbitrary code strings — a critical
+      injection risk. AI models use eval() as a convenient shortcut.
+      Use JSON.parse() for data, or restructure the logic.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      category: security
+      ai-risk: critical
+
+  - id: hardcoded-secret-js
+    patterns:
+      - pattern: const password = "..."
+      - pattern: const secret = "..."
+      - pattern: const apiKey = "..."
+      - pattern: const api_key = "..."
+      - pattern: const token = "..."
+      - pattern: let password = "..."
+      - pattern: let secret = "..."
+      - pattern: let apiKey = "..."
+      - pattern: let token = "..."
+    message: >
+      Possible hardcoded credential in JavaScript/TypeScript. AI models insert
+      placeholder secrets that get committed. Use environment variables
+      (process.env.SECRET) or a secrets manager.
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      category: security
+      ai-risk: high
+
+  - id: innerHTML-xss
+    patterns:
+      - pattern: $EL.innerHTML = $VAL
+      - pattern: $EL.innerHTML += $VAL
+    message: >
+      Direct assignment to innerHTML with a variable is an XSS vector.
+      AI-generated frontend code frequently uses innerHTML instead of
+      textContent or a sanitiser. Use DOMPurify or textContent for untrusted data.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      category: security
+      ai-risk: high
+
+  - id: sql-template-literal-js
+    patterns:
+      - pattern: $DB.query(`... ${...} ...`)
+      - pattern: $DB.execute(`... ${...} ...`)
+      - pattern: $DB.run(`... ${...} ...`)
+    message: >
+      SQL query constructed with a template literal — SQL injection risk.
+      AI models frequently inline variables directly into SQL strings.
+      Use parameterised queries with placeholders.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      category: security
+      ai-risk: critical
+
+  - id: dangerously-set-inner-html
+    pattern: |
+      <$EL dangerouslySetInnerHTML={{__html: $VAL}} />
+    message: >
+      dangerouslySetInnerHTML with a variable value is an XSS risk. AI-generated
+      React code often uses this pattern when rendering user content. Sanitise
+      the value with DOMPurify before setting it.
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      category: security
+      ai-risk: high
+
+  # -------------------------------------------------------------------------
+  # Performance anti-patterns
+  # -------------------------------------------------------------------------
+
+  - id: nested-loop-push-js
+    pattern: |
+      for ($I of ...) {
+        for ($J of ...) {
+          $ARR.push(...);
+        }
+      }
+    message: >
+      Nested loop accumulating into an array — likely O(n²) complexity.
+      AI models prefer this over flat map/reduce or generator patterns.
+      Verify this is not on a hot path.
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      category: performance
+      ai-risk: medium
+
+  - id: string-concat-loop-js
+    pattern: |
+      for ($X of ...) {
+        $S = $S + ...;
+      }
+    message: >
+      String concatenation in a loop creates O(n²) work. AI-generated code
+      frequently does this instead of collecting parts in an array and
+      joining at the end: `parts.push(x); return parts.join('')`.
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      category: performance
+      ai-risk: high
+
+  - id: sync-fs-in-handler
+    patterns:
+      - pattern: fs.readFileSync(...)
+      - pattern: fs.writeFileSync(...)
+    message: >
+      Synchronous fs calls block the Node.js event loop. AI models often use
+      the Sync variants for simplicity. Use fs.promises or the callback API
+      in request handlers and server code.
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      category: performance
+      ai-risk: medium
+
+  # -------------------------------------------------------------------------
+  # Type safety anti-patterns (TypeScript)
+  # -------------------------------------------------------------------------
+
+  - id: any-type-annotation
+    patterns:
+      - pattern: "$X: any"
+      - pattern: "as any"
+    message: >
+      Explicit `any` type annotation disables TypeScript's type checking.
+      AI models heavily use `any` to avoid having to type complex structures.
+      Use `unknown` with type guards, or define a proper interface.
+    languages: [typescript]
+    severity: WARNING
+    metadata:
+      category: type-safety
+      ai-risk: high
+
+  - id: non-null-assertion-overuse
+    pattern: "$X!.$Y"
+    message: >
+      Non-null assertion operator (!) suppresses null/undefined checks.
+      AI models use this to silence TypeScript errors rather than handling
+      the nullish case properly. Add an explicit null check instead.
+    languages: [typescript]
+    severity: WARNING
+    metadata:
+      category: type-safety
+      ai-risk: medium
+
+  # -------------------------------------------------------------------------
+  # Test quality (applied to test files only)
+  # -------------------------------------------------------------------------
+
+  - id: expect-true-js
+    patterns:
+      - pattern: expect(true).toBe(true)
+      - pattern: expect($X).toBe($X)
+      - pattern: assert.ok(true)
+    paths:
+      include:
+        - "**/*.test.js"
+        - "**/*.test.ts"
+        - "**/*.spec.js"
+        - "**/*.spec.ts"
+        - "**/__tests__/**"
+    message: >
+      Trivially-passing assertion — AI-generated test suites frequently assert
+      `true` or compare a value to itself. This gives false coverage confidence.
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      category: test-quality
+      ai-risk: high
+
+  - id: empty-test-block
+    pattern: |
+      it($NAME, () => {});
+    paths:
+      include:
+        - "**/*.test.js"
+        - "**/*.test.ts"
+        - "**/*.spec.js"
+        - "**/*.spec.ts"
+    message: >
+      Empty test body — a common AI placeholder pattern that marks tests as
+      passing without asserting anything. Fill in the test body or remove it.
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      category: test-quality
+      ai-risk: high

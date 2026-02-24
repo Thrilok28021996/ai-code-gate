@@ -1,0 +1,236 @@
+rules:
+
+  # -------------------------------------------------------------------------
+  # Complexity / structure anti-patterns
+  # -------------------------------------------------------------------------
+
+  - id: bare-except
+    patterns:
+      - pattern: |
+          try:
+            ...
+          except:
+            ...
+    message: >
+      Bare `except:` swallows all exceptions including KeyboardInterrupt and
+      SystemExit. AI-generated code frequently produces this pattern.
+      Use `except Exception:` at minimum, or catch specific types.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: error-handling
+      ai-risk: high
+
+  - id: broad-exception-catch
+    patterns:
+      - pattern: |
+          try:
+            ...
+          except Exception:
+            pass
+    message: >
+      Catching all exceptions and silently passing is a common AI anti-pattern.
+      Log the error or re-raise after handling.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: error-handling
+      ai-risk: high
+
+  - id: mutable-default-argument
+    pattern: |
+      def $FUNC(..., $ARG = [...], ...):
+        ...
+    message: >
+      Mutable default argument — a classic Python footgun that AI models
+      reproduce frequently. Use `None` as default and assign inside the function.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: correctness
+      ai-risk: high
+
+  - id: mutable-default-dict
+    pattern: |
+      def $FUNC(..., $ARG = {...}, ...):
+        ...
+    message: >
+      Mutable dict default argument. Use `None` and assign `{}` inside the body.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: correctness
+      ai-risk: high
+
+  # -------------------------------------------------------------------------
+  # Security anti-patterns
+  # -------------------------------------------------------------------------
+
+  - id: sql-string-format
+    patterns:
+      - pattern: |
+          $CURSOR.execute("..." % ...)
+      - pattern: |
+          $CURSOR.execute(f"...{...}...")
+      - pattern: |
+          $CURSOR.execute("..." + ...)
+    message: >
+      SQL query built via string formatting — SQL injection risk.
+      AI models frequently generate this pattern. Use parameterised queries.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      ai-risk: critical
+
+  - id: hardcoded-secret-assignment
+    patterns:
+      - pattern: password = "..."
+      - pattern: secret = "..."
+      - pattern: api_key = "..."
+      - pattern: token = "..."
+    message: >
+      Possible hardcoded credential. AI models often insert placeholder secrets
+      that end up committed. Use environment variables or a secrets manager.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: security
+      ai-risk: high
+
+  - id: shell-injection
+    patterns:
+      - pattern: subprocess.call($CMD, shell=True)
+      - pattern: subprocess.run($CMD, shell=True)
+      - pattern: os.system(...)
+    message: >
+      Shell=True with user-controlled input enables shell injection.
+      Pass a list of arguments and set shell=False.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      ai-risk: high
+
+  # -------------------------------------------------------------------------
+  # Input validation
+  # -------------------------------------------------------------------------
+
+  - id: missing-input-validation-api
+    patterns:
+      - pattern: |
+          @app.route(...)
+          def $HANDLER(...):
+            $DATA = request.json
+            ...
+            return ...
+      - pattern-not: |
+          @app.route(...)
+          def $HANDLER(...):
+            ...
+            if ...:
+              ...
+            ...
+    message: >
+      Flask route handler accesses request.json without any conditional
+      validation. AI-generated handlers frequently skip null/type checks.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: validation
+      ai-risk: medium
+
+  # -------------------------------------------------------------------------
+  # Performance anti-patterns
+  # -------------------------------------------------------------------------
+
+  - id: nested-loop-append
+    pattern: |
+      for $I in ...:
+        for $J in ...:
+          $LIST.append(...)
+    message: >
+      Nested loop with list.append — likely O(n²) accumulation.
+      AI models prefer this over list comprehensions or numpy vectorisation.
+      Verify this is not on a hot path.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: performance
+      ai-risk: medium
+
+  - id: string-concat-in-loop
+    pattern: |
+      for $X in ...:
+        $S = $S + ...
+    message: >
+      String concatenation inside a loop is O(n²). AI-generated code
+      frequently does this instead of using `"".join(parts)`.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: performance
+      ai-risk: high
+
+  # -------------------------------------------------------------------------
+  # Singleton / global state anti-patterns
+  # -------------------------------------------------------------------------
+
+  - id: unjustified-global
+    pattern: |
+      def $FUNC(...):
+        global $VAR
+        ...
+    message: >
+      Use of `global` inside a function. AI models use globals as a shortcut
+      around proper state management. Consider class attributes or dependency
+      injection instead.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: design
+      ai-risk: medium
+
+  # -------------------------------------------------------------------------
+  # Test quality (applied to test files only)
+  # -------------------------------------------------------------------------
+
+  - id: assert-true-without-message
+    patterns:
+      - pattern: assert True
+      - pattern: assert $X == $X
+    paths:
+      include:
+        - "tests/**"
+        - "test_*.py"
+        - "*_test.py"
+    message: >
+      Trivially-passing assertion — common in AI-generated test suites that
+      assert `True` or compare a value to itself. This gives false coverage
+      confidence.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: test-quality
+      ai-risk: high
+
+  - id: empty-except-in-test
+    patterns:
+      - pattern: |
+          try:
+            ...
+          except:
+            pass
+    paths:
+      include:
+        - "tests/**"
+        - "test_*.py"
+        - "*_test.py"
+    message: >
+      Silent exception swallowing in a test — the test will always pass even
+      if the code under test raises. AI often generates this pattern.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: test-quality
+      ai-risk: critical

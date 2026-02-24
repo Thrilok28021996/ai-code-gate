@@ -1,0 +1,42 @@
+# Pre-commit hooks for AI code quality gate
+# Install: pip install pre-commit && pre-commit install
+# Run manually: pre-commit run --all-files
+
+repos:
+  # --- Complexity check (lizard) ---
+  - repo: local
+    hooks:
+      - id: complexity-check
+        name: Cyclomatic Complexity Gate
+        entry: python scripts/precommit_complexity.py --max-complexity 15 --warn-complexity 10
+        language: python
+        types: [python]
+        additional_dependencies: [lizard]
+        pass_filenames: true
+
+  # --- Semgrep anti-pattern scan ---
+  - repo: https://github.com/returntocorp/semgrep
+    rev: v1.68.0
+    hooks:
+      - id: semgrep
+        name: AI Anti-Pattern Scan
+        args:
+          - --config=semgrep-rules/
+          - --severity=WARNING
+          - --error         # exit 1 on any finding
+          - --quiet
+
+  # --- Standard Python hygiene ---
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.3.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  # --- Secret detection ---
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.4.0
+    hooks:
+      - id: detect-secrets
+        args: [--baseline, .secrets.baseline]

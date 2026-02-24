@@ -1,0 +1,155 @@
+name: AI Code Quality Gate
+
+on:
+  pull_request:
+    branches: [main, master, develop]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: Maintainability scoring
+  # Runs lizard (complexity) + semgrep (anti-patterns) + coverage, then
+  # computes a 0-100 score and posts it as a sticky PR comment.
+  # Blocks merge if score < threshold.
+  # ---------------------------------------------------------------------------
+  maintainability-gate:
+    name: Maintainability Score Gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # -----------------------------------------------------------------------
+      # Use the bundled action for the full analysis pipeline.
+      # Override any inputs here to tune for your project.
+      # -----------------------------------------------------------------------
+      - name: Run AI Code Gate
+        uses: ./
+        with:
+          threshold: "70"
+          src: "."
+          languages: "python"          # add "javascript,typescript" for JS/TS repos
+          fail-on-threshold: "true"
+          post-comment: "true"
+          # Uncomment to enable Slack notifications:
+          # slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          #
+          # Uncomment to persist score history (path relative to repo root):
+          # score-store: ".ai-gate/scores.db"
+          #
+          # Tune thresholds per-project (or use pyproject.toml [tool.ai-gate]):
+          # complexity-excellent: "5"
+          # complexity-acceptable: "10"
+          # complexity-poor: "20"
+          # coverage-excellent: "90"
+          # coverage-acceptable: "70"
+          # coverage-poor: "40"
+
+      # -----------------------------------------------------------------------
+      # Generate and commit badge JSON so README badges stay current.
+      # Requires a separate step after the action so score.txt is available.
+      # -----------------------------------------------------------------------
+      - name: Generate badge JSON
+        if: always()
+        run: |
+          if [ -f score.txt ]; then
+            python scripts/score.py \
+              --coverage coverage.json \
+              --semgrep semgrep-results.json \
+              --src . \
+              --badge-output badge.json \
+              --score-output /dev/null 2>/dev/null || true
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Job 2: Fuzz testing
+  # Detects which changed files have registered fuzz harnesses via
+  # fuzz/targets.txt and runs them under atheris for a CI-safe time budget.
+  # Corpus is cached between runs for better coverage over time.
+  # ---------------------------------------------------------------------------
+  fuzz-critical-paths:
+    name: Fuzz Critical Functions
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install atheris and project dependencies
+        run: |
+          pip install atheris coverage
+          pip install -e ".[dev]" 2>/dev/null || pip install -r requirements.txt 2>/dev/null || true
+
+      - name: Detect changed files and match fuzz targets
+        id: targets
+        run: |
+          CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          python scripts/detect_fuzz_targets.py \
+            --changed "$CHANGED" \
+            --targets fuzz/targets.txt \
+            --output fuzz-targets-active.txt
+          COUNT=$(grep -c . fuzz-targets-active.txt 2>/dev/null || echo 0)
+          echo "found=$COUNT" >> "$GITHUB_OUTPUT"
+
+      - name: Restore fuzz corpus cache
+        if: steps.targets.outputs.found != '0'
+        uses: actions/cache@v4
+        with:
+          path: fuzz-corpus/
+          key: fuzz-corpus-${{ github.base_ref }}-${{ hashFiles('fuzz/targets.txt') }}
+          restore-keys: |
+            fuzz-corpus-${{ github.base_ref }}-
+
+      - name: Run fuzz targets (30s each, CI budget)
+        if: steps.targets.outputs.found != '0'
+        run: |
+          mkdir -p fuzz-corpus fuzz-artifacts
+          python scripts/run_fuzz.py \
+            --targets fuzz-targets-active.txt \
+            --timeout 30 \
+            --corpus-dir fuzz-corpus \
+            --artifacts-dir fuzz-artifacts \
+            --output fuzz-report.md \
+            --score-output fuzz-crashed.txt
+
+      - name: Save fuzz corpus cache
+        if: steps.targets.outputs.found != '0'
+        uses: actions/cache/save@v4
+        with:
+          path: fuzz-corpus/
+          key: fuzz-corpus-${{ github.base_ref }}-${{ hashFiles('fuzz/targets.txt') }}
+
+      - name: Post fuzz results to PR
+        if: steps.targets.outputs.found != '0'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: fuzz-results
+          path: fuzz-report.md
+
+      # Single enforcement step — reads the pre-computed crash flag, no re-run.
+      - name: Fail if fuzz found crashes
+        if: steps.targets.outputs.found != '0'
+        run: |
+          if [ "$(cat fuzz-crashed.txt)" = "1" ]; then
+            echo "BLOCKED: fuzz found crashes — see fuzz-report.md above"
+            exit 1
+          fi
+          echo "PASSED: no crashes found"
+
+      - name: Skip notice (no matching fuzz targets)
+        if: steps.targets.outputs.found == '0'
+        run: echo "No fuzz targets match the changed files in this PR — skipping fuzz job."

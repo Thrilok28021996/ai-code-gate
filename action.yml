@@ -1,0 +1,245 @@
+name: "AI Code Gate"
+description: "Block low-quality AI-generated code from merging. Scores complexity, coverage, and anti-patterns on every PR."
+author: "ai-code-gate"
+
+branding:
+  icon: "shield"
+  color: "red"
+
+inputs:
+  threshold:
+    description: "Minimum score (0-100) required to pass. PRs below this score are blocked."
+    required: false
+    default: "70"
+  src:
+    description: "Source directory to analyse (relative to repo root)."
+    required: false
+    default: "."
+  python-version:
+    description: "Python version to use for analysis."
+    required: false
+    default: "3.11"
+  fail-on-threshold:
+    description: "Exit with code 1 if score is below threshold. Set to 'false' to report only."
+    required: false
+    default: "true"
+  coverage-json:
+    description: "Path to coverage.json produced by coverage.py. Leave blank to run tests automatically."
+    required: false
+    default: ""
+  semgrep-config:
+    description: "Path to semgrep rules directory or config. Defaults to bundled ai-antipatterns rules."
+    required: false
+    default: ""
+  complexity-excellent:
+    description: "Avg cyclomatic complexity that earns full complexity points."
+    required: false
+    default: "5"
+  complexity-acceptable:
+    description: "Avg cyclomatic complexity that earns half complexity points."
+    required: false
+    default: "10"
+  complexity-poor:
+    description: "Avg cyclomatic complexity that earns zero complexity points."
+    required: false
+    default: "20"
+  coverage-excellent:
+    description: "Coverage % that earns full coverage points."
+    required: false
+    default: "90"
+  coverage-acceptable:
+    description: "Coverage % that earns half coverage points."
+    required: false
+    default: "70"
+  coverage-poor:
+    description: "Coverage % that earns zero coverage points."
+    required: false
+    default: "40"
+  antipattern-excellent:
+    description: "Anti-pattern findings per 100 LOC that earns full anti-pattern points."
+    required: false
+    default: "0"
+  antipattern-acceptable:
+    description: "Anti-pattern findings per 100 LOC that earns half anti-pattern points."
+    required: false
+    default: "2"
+  antipattern-poor:
+    description: "Anti-pattern findings per 100 LOC that earns zero anti-pattern points."
+    required: false
+    default: "5"
+  post-comment:
+    description: "Post score as a sticky PR comment. Requires pull-requests: write permission."
+    required: false
+    default: "true"
+  slack-webhook-url:
+    description: "Slack webhook URL to post score notifications. Leave blank to skip."
+    required: false
+    default: ""
+  score-store:
+    description: "Path to SQLite database for score history. Leave blank to skip history tracking."
+    required: false
+    default: ""
+  languages:
+    description: "Comma-separated list of languages to analyse: python,javascript,typescript. Default: python."
+    required: false
+    default: "python"
+
+outputs:
+  score:
+    description: "The computed maintainability score (0-100)."
+    value: ${{ steps.compute.outputs.score }}
+  passed:
+    description: "'true' if score >= threshold, 'false' otherwise."
+    value: ${{ steps.compute.outputs.passed }}
+  report-path:
+    description: "Path to the generated markdown score report."
+    value: "score-report.md"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+        cache: pip
+
+    - name: Install gate dependencies
+      shell: bash
+      run: |
+        pip install \
+          lizard>=1.17 \
+          semgrep>=1.68 \
+          "coverage[toml]>=7.4" \
+          pytest>=8.0 2>/dev/null || true
+
+    - name: Install Node.js (for JS/TS analysis)
+      if: contains(inputs.languages, 'javascript') || contains(inputs.languages, 'typescript')
+      uses: actions/setup-node@v4
+      with:
+        node-version: "20"
+
+    - name: Install JS/TS analysis tools
+      if: contains(inputs.languages, 'javascript') || contains(inputs.languages, 'typescript')
+      shell: bash
+      run: |
+        npm install -g \
+          eslint \
+          @typescript-eslint/parser \
+          @typescript-eslint/eslint-plugin \
+          escomplex-cli 2>/dev/null || true
+
+    - name: Run tests with branch coverage
+      shell: bash
+      run: |
+        if [ -z "${{ inputs.coverage-json }}" ]; then
+          coverage run --branch -m pytest ${{ inputs.src }} --tb=short -q 2>&1 | tee coverage-output.txt || true
+          coverage json -o coverage.json || echo '{"totals":{"percent_covered":0}}' > coverage.json
+          echo "COVERAGE_PATH=coverage.json" >> "$GITHUB_ENV"
+        else
+          echo "COVERAGE_PATH=${{ inputs.coverage-json }}" >> "$GITHUB_ENV"
+        fi
+
+    - name: Run semgrep anti-pattern scan
+      shell: bash
+      run: |
+        RULES="${{ inputs.semgrep-config }}"
+        if [ -z "$RULES" ]; then
+          # Use bundled rules from the action's own directory
+          RULES="${{ github.action_path }}/semgrep-rules/"
+        fi
+        semgrep \
+          --config "$RULES" \
+          --json \
+          --output semgrep-results.json \
+          --severity WARNING \
+          --metrics=off \
+          ${{ inputs.src }} || true
+
+    - name: Run JS/TS complexity analysis
+      if: contains(inputs.languages, 'javascript') || contains(inputs.languages, 'typescript')
+      shell: bash
+      run: |
+        python "${{ github.action_path }}/scripts/measure_js_complexity.py" \
+          --src "${{ inputs.src }}" \
+          --output js-complexity.json || echo '{}' > js-complexity.json
+
+    - name: Compute maintainability score
+      id: compute
+      shell: bash
+      run: |
+        python "${{ github.action_path }}/scripts/score.py" \
+          --coverage "$COVERAGE_PATH" \
+          --semgrep semgrep-results.json \
+          --src "${{ inputs.src }}" \
+          --threshold "${{ inputs.threshold }}" \
+          --output score-report.md \
+          --score-output score.txt \
+          --complexity-excellent "${{ inputs.complexity-excellent }}" \
+          --complexity-acceptable "${{ inputs.complexity-acceptable }}" \
+          --complexity-poor "${{ inputs.complexity-poor }}" \
+          --coverage-excellent "${{ inputs.coverage-excellent }}" \
+          --coverage-acceptable "${{ inputs.coverage-acceptable }}" \
+          --coverage-poor "${{ inputs.coverage-poor }}" \
+          --antipattern-excellent "${{ inputs.antipattern-excellent }}" \
+          --antipattern-acceptable "${{ inputs.antipattern-acceptable }}" \
+          --antipattern-poor "${{ inputs.antipattern-poor }}" \
+          ${{ inputs.languages != 'python' && '--js-complexity js-complexity.json' || '' }}
+
+        SCORE=$(cat score.txt)
+        echo "score=$SCORE" >> "$GITHUB_OUTPUT"
+
+        THRESHOLD="${{ inputs.threshold }}"
+        python -c "
+        import sys
+        score = float('$SCORE')
+        threshold = float('$THRESHOLD')
+        passed = score >= threshold
+        print(f'passed={str(passed).lower()}')
+        " >> "$GITHUB_OUTPUT"
+
+    - name: Store score history
+      if: inputs.score-store != ''
+      shell: bash
+      run: |
+        python "${{ github.action_path }}/scripts/score_store.py" \
+          --db "${{ inputs.score-store }}" \
+          --score "$(cat score.txt)" \
+          --repo "${{ github.repository }}" \
+          --pr "${{ github.event.pull_request.number }}" \
+          --sha "${{ github.event.pull_request.head.sha }}" \
+          --branch "${{ github.head_ref }}" || true
+
+    - name: Send Slack notification
+      if: inputs.slack-webhook-url != ''
+      shell: bash
+      run: |
+        python "${{ github.action_path }}/scripts/notify.py" \
+          --webhook "${{ inputs.slack-webhook-url }}" \
+          --score "$(cat score.txt)" \
+          --threshold "${{ inputs.threshold }}" \
+          --repo "${{ github.repository }}" \
+          --pr "${{ github.event.pull_request.number }}" \
+          --pr-url "${{ github.event.pull_request.html_url }}" || true
+
+    - name: Post score to PR
+      if: inputs.post-comment == 'true'
+      uses: marocchino/sticky-pull-request-comment@v2
+      with:
+        path: score-report.md
+
+    - name: Enforce score threshold
+      if: inputs.fail-on-threshold == 'true'
+      shell: bash
+      run: |
+        SCORE=$(cat score.txt)
+        THRESHOLD="${{ inputs.threshold }}"
+        python -c "
+        import sys
+        score = float('$SCORE')
+        threshold = float('$THRESHOLD')
+        if score < threshold:
+            print(f'BLOCKED: score {score:.1f} < threshold {threshold}')
+            sys.exit(1)
+        print(f'PASSED: score {score:.1f} >= threshold {threshold}')
+        "

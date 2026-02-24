@@ -1,0 +1,8 @@
+# Fuzz target registry
+# Format: <source_glob>  <fuzz_harness_file>
+# When a PR touches a file matching the glob, the paired harness runs in CI.
+#
+# Examples (uncomment and adapt):
+# src/parsers/*.py          fuzz/fuzz_parser.py
+# src/auth/**               fuzz/fuzz_auth.py
+# src/serializers.py        fuzz/fuzz_serializers.py

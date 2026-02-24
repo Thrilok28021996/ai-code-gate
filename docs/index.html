@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Code Gate — Block low-quality AI-generated code before it merges</title>
+  <meta name="description" content="A GitHub Action that scores every PR on complexity, test coverage, and AI anti-patterns. Merge blocked if the score drops below your threshold." />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --green: #3fb950;
+      --red: #f85149;
+      --yellow: #d29922;
+      --blue: #58a6ff;
+      --accent: #238636;
+      --accent-hover: #2ea043;
+      --code-bg: #1f2937;
+      --radius: 8px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      font-size: 16px;
+      line-height: 1.6;
+    }
+
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ── Nav ── */
+    nav {
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 56px;
+      position: sticky;
+      top: 0;
+      background: var(--bg);
+      z-index: 100;
+    }
+    .nav-logo {
+      font-weight: 700;
+      font-size: 18px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .nav-logo .shield { font-size: 22px; }
+    .nav-links { display: flex; gap: 24px; font-size: 14px; color: var(--muted); }
+    .nav-links a { color: var(--muted); }
+    .nav-links a:hover { color: var(--text); }
+    .nav-cta {
+      background: var(--accent);
+      color: #fff;
+      padding: 6px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .nav-cta:hover { background: var(--accent-hover); text-decoration: none; }
+
+    /* ── Hero ── */
+    .hero {
+      text-align: center;
+      padding: 80px 24px 60px;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    .badge-row {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 28px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      border: 1px solid var(--border);
+    }
+    .badge.green { background: #1a2e1a; border-color: #2ea043; color: var(--green); }
+    .badge.blue  { background: #0d2033; border-color: #1f6feb; color: var(--blue); }
+    .badge.yellow{ background: #2b2100; border-color: #9e6a03; color: var(--yellow); }
+
+    .hero h1 {
+      font-size: clamp(28px, 5vw, 52px);
+      font-weight: 800;
+      line-height: 1.15;
+      letter-spacing: -1px;
+      margin-bottom: 20px;
+    }
+    .hero h1 span { color: var(--green); }
+    .hero p {
+      font-size: 18px;
+      color: var(--muted);
+      max-width: 600px;
+      margin: 0 auto 36px;
+    }
+    .hero-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+    .btn {
+      display: inline-block;
+      padding: 12px 24px;
+      border-radius: 6px;
+      font-size: 16px;
+      font-weight: 600;
+    }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover { background: var(--accent-hover); text-decoration: none; }
+    .btn-secondary {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .btn-secondary:hover { border-color: var(--muted); text-decoration: none; }
+
+    /* ── Score demo ── */
+    .demo {
+      max-width: 700px;
+      margin: 48px auto 0;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: var(--surface);
+      text-align: left;
+    }
+    .demo-header {
+      background: #21262d;
+      padding: 10px 16px;
+      font-size: 13px;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .demo-body { padding: 20px; font-size: 14px; }
+    .demo-title { font-size: 16px; font-weight: 700; margin-bottom: 12px; }
+    .demo-title.pass { color: var(--green); }
+    .demo-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .demo-table th, .demo-table td {
+      padding: 6px 12px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    .demo-table th { color: var(--muted); font-weight: 600; }
+    .demo-table td.score { text-align: right; font-variant-numeric: tabular-nums; }
+    .score-bar {
+      display: inline-block;
+      height: 6px;
+      border-radius: 3px;
+      background: var(--green);
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+    .total-row td { font-weight: 700; border-bottom: none; padding-top: 10px; }
+
+    /* ── Features ── */
+    .section { padding: 72px 24px; }
+    .section-inner { max-width: 1000px; margin: 0 auto; }
+    .section-label {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--green);
+      margin-bottom: 12px;
+    }
+    .section h2 {
+      font-size: clamp(22px, 4vw, 36px);
+      font-weight: 800;
+      margin-bottom: 16px;
+    }
+    .section p.lead {
+      color: var(--muted);
+      font-size: 17px;
+      max-width: 560px;
+      margin-bottom: 48px;
+    }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 20px;
+    }
+    .feature-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+    }
+    .feature-icon { font-size: 28px; margin-bottom: 12px; }
+    .feature-card h3 { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+    .feature-card p { font-size: 14px; color: var(--muted); line-height: 1.55; }
+
+    /* ── Install ── */
+    .install { background: var(--surface); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+    .steps { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 24px; margin-top: 40px; }
+    .step { display: flex; gap: 16px; }
+    .step-num {
+      flex-shrink: 0;
+      width: 32px; height: 32px;
+      background: var(--accent);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 14px;
+    }
+    .step-body h4 { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
+    .step-body p { font-size: 14px; color: var(--muted); }
+
+    pre, code {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 13px;
+    }
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      overflow-x: auto;
+      margin-top: 20px;
+    }
+    code { background: var(--code-bg); padding: 2px 5px; border-radius: 4px; }
+
+    /* ── Scoring ── */
+    .signals { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; margin-top: 40px; }
+    .signal-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+    }
+    .signal-pts {
+      font-size: 36px;
+      font-weight: 800;
+      color: var(--green);
+      line-height: 1;
+      margin-bottom: 4px;
+    }
+    .signal-label { font-size: 14px; font-weight: 700; margin-bottom: 6px; }
+    .signal-desc { font-size: 13px; color: var(--muted); }
+
+    /* ── Languages ── */
+    .langs { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 32px; }
+    .lang-pill {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 8px 16px;
+      font-size: 14px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* ── Social proof ── */
+    .quotes { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 20px; margin-top: 40px; }
+    .quote-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+    }
+    .quote-text { font-size: 15px; line-height: 1.6; margin-bottom: 16px; font-style: italic; color: var(--muted); }
+    .quote-author { font-size: 13px; font-weight: 700; }
+    .quote-role { font-size: 12px; color: var(--muted); }
+
+    /* ── Footer ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 32px 24px;
+      text-align: center;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    footer a { color: var(--muted); }
+    footer a:hover { color: var(--text); }
+
+    @media (max-width: 600px) {
+      .nav-links { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ─── Nav ─────────────────────────────────────────── -->
+<nav>
+  <div class="nav-logo">
+    <span class="shield">🛡️</span>
+    AI Code Gate
+  </div>
+  <div class="nav-links">
+    <a href="#how-it-works">How it works</a>
+    <a href="#install">Install</a>
+    <a href="#scoring">Scoring</a>
+    <a href="https://github.com/your-org/ai-code-gate">GitHub</a>
+  </div>
+  <a href="https://github.com/marketplace/actions/ai-code-gate" class="nav-cta btn-primary btn">
+    Add to repo
+  </a>
+</nav>
+
+<!-- ─── Hero ─────────────────────────────────────────── -->
+<section class="hero">
+  <div class="badge-row">
+    <span class="badge green">✓ 126 tests passing</span>
+    <span class="badge blue">GitHub Action</span>
+    <span class="badge yellow">Python · JS · TS</span>
+  </div>
+
+  <h1>Stop AI-generated code<br><span>from degrading your codebase</span></h1>
+
+  <p>
+    A GitHub Action that scores every pull request on complexity, test coverage,
+    and AI anti-patterns — and blocks the merge if the score drops below your threshold.
+  </p>
+
+  <div class="hero-actions">
+    <a href="#install" class="btn btn-primary">Get started — 2 min setup</a>
+    <a href="https://github.com/your-org/ai-code-gate" class="btn btn-secondary">View on GitHub →</a>
+  </div>
+
+  <!-- live score demo card -->
+  <div class="demo">
+    <div class="demo-header">
+      <span>💬</span>
+      AI Code Gate commented on your pull request
+    </div>
+    <div class="demo-body">
+      <div class="demo-title pass">✅ AI Code Quality Gate — PASSED</div>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:14px;">Languages analysed: PYTHON, JAVASCRIPT</p>
+      <table class="demo-table">
+        <thead>
+          <tr><th>Signal</th><th style="text-align:right">Score</th><th>Detail</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Complexity (40 pts)</td>
+            <td class="score"><span class="score-bar" style="width:36px"></span>36.0</td>
+            <td style="color:var(--muted);font-size:12px">avg cyclomatic complexity: <strong>3.2</strong></td>
+          </tr>
+          <tr>
+            <td>Coverage (35 pts)</td>
+            <td class="score"><span class="score-bar" style="width:28px;background:#d29922"></span>28.0</td>
+            <td style="color:var(--muted);font-size:12px">branch+line coverage: <strong>76.4%</strong></td>
+          </tr>
+          <tr>
+            <td>Anti-patterns (25 pts)</td>
+            <td class="score"><span class="score-bar" style="width:25px"></span>25.0</td>
+            <td style="color:var(--muted);font-size:12px"><strong>0</strong> findings (0.00 per 100 LOC)</td>
+          </tr>
+          <tr class="total-row">
+            <td><strong>Total</strong></td>
+            <td class="score" style="color:var(--green)"><strong>89.0 / 100</strong></td>
+            <td style="color:var(--muted);font-size:12px">Threshold: 70</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ─── How it works ──────────────────────────────────── -->
+<section class="section" id="how-it-works">
+  <div class="section-inner">
+    <div class="section-label">How it works</div>
+    <h2>Three signals. One score. One decision.</h2>
+    <p class="lead">Every pull request gets analysed across three dimensions of code quality, then scored 0–100. Below 70? Blocked.</p>
+
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon">🌀</div>
+        <h3>Cyclomatic Complexity</h3>
+        <p>Runs <code>lizard</code> (Python) and <code>escomplex</code> (JS/TS) to measure function complexity. AI models write code that works but doesn't refactor — this catches it.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🧪</div>
+        <h3>Test Coverage</h3>
+        <p>Branch + line coverage via <code>coverage.py</code>. AI-generated tests often test happy paths only. Branch coverage exposes the missing edge cases.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🔍</div>
+        <h3>AI Anti-Pattern Scan</h3>
+        <p>Custom Semgrep rules for patterns AI models produce disproportionately: bare <code>except</code>, SQL via f-strings, hardcoded secrets, mutable defaults, <code>eval()</code>, and more.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🐛</div>
+        <h3>Fuzz Testing</h3>
+        <p>Register fuzz harnesses against source globs in <code>fuzz/targets.txt</code>. When a PR touches those files, atheris runs them automatically — crashes block the merge.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">📊</div>
+        <h3>Score History</h3>
+        <p>Every run is stored in a lightweight SQLite database. Track score trends per repo and branch over time — see if your codebase is getting better or worse.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🔔</div>
+        <h3>Slack Notifications</h3>
+        <p>Send pass/fail notifications to a Slack channel or any webhook endpoint. Keep the whole team informed when AI debt is accumulating.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Install ──────────────────────────────────────── -->
+<section class="section install" id="install">
+  <div class="section-inner">
+    <div class="section-label">Installation</div>
+    <h2>Running in 2 minutes</h2>
+    <p class="lead">No SaaS account. No data leaves your repo. One workflow file.</p>
+
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <h4>Copy the workflow</h4>
+          <p>Add the GitHub Actions workflow to your repository. It runs automatically on every pull request.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <h4>Set your threshold</h4>
+          <p>The default is 70/100. Tune it in <code>pyproject.toml</code> or via the <code>threshold</code> input — no code changes needed.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <h4>Add pre-commit hooks</h4>
+          <p>Optional but recommended: block high-complexity functions and AI anti-patterns at commit time, before they ever reach CI.</p>
+        </div>
+      </div>
+    </div>
+
+    <pre><span style="color:#8b949e"># .github/workflows/ai-gate.yml</span>
+name: AI Code Quality Gate
+on:
+  pull_request:
+    branches: [main, master, develop]
+
+permissions:
+  contents: read
+  pull-requests: write   <span style="color:#8b949e"># needed to post PR comment</span>
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Run AI Code Gate
+        uses: <span style="color:#79c0ff">your-org/ai-code-gate@v1</span>
+        with:
+          threshold: <span style="color:#a5d6ff">"70"</span>
+          languages: <span style="color:#a5d6ff">"python"</span>   <span style="color:#8b949e"># or "python,javascript,typescript"</span>
+          post-comment: <span style="color:#a5d6ff">"true"</span>
+          <span style="color:#8b949e"># slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}</span></pre>
+
+    <p style="margin-top:24px;font-size:14px;color:var(--muted)">
+      Want to tune thresholds without editing YAML? Add a <code>[tool.ai-gate]</code> section to your
+      <code>pyproject.toml</code>:
+    </p>
+    <pre><span style="color:#8b949e"># pyproject.toml</span>
+[tool.ai-gate]
+threshold = 75
+
+[tool.ai-gate.complexity]
+excellent   = 5
+acceptable  = 10
+poor        = 20
+
+[tool.ai-gate.coverage]
+excellent   = 90
+acceptable  = 70
+poor        = 40
+
+[tool.ai-gate.antipatterns]
+excellent   = 0
+acceptable  = 2
+poor        = 5</pre>
+  </div>
+</section>
+
+<!-- ─── Scoring ──────────────────────────────────────── -->
+<section class="section" id="scoring">
+  <div class="section-inner">
+    <div class="section-label">Scoring</div>
+    <h2>How the 0–100 score is calculated</h2>
+    <p class="lead">Three signals, linearly interpolated between configurable thresholds. Straightforward to understand and audit.</p>
+
+    <div class="signals">
+      <div class="signal-card">
+        <div class="signal-pts">40</div>
+        <div class="signal-label">Complexity</div>
+        <div class="signal-desc">Average cyclomatic complexity across all functions. Full marks at ≤5, zero at ≥20.</div>
+      </div>
+      <div class="signal-card">
+        <div class="signal-pts">35</div>
+        <div class="signal-label">Coverage</div>
+        <div class="signal-desc">Branch + line coverage percentage. Full marks at ≥90%, zero at ≤40%.</div>
+      </div>
+      <div class="signal-card">
+        <div class="signal-pts">25</div>
+        <div class="signal-label">Anti-patterns</div>
+        <div class="signal-desc">AI anti-pattern findings per 100 LOC. Full marks at 0, zero at ≥5 per 100 LOC.</div>
+      </div>
+    </div>
+
+    <h3 style="margin-top:48px;margin-bottom:16px;font-size:18px">Languages supported</h3>
+    <div class="langs">
+      <div class="lang-pill">🐍 Python</div>
+      <div class="lang-pill">🟨 JavaScript</div>
+      <div class="lang-pill">🔷 TypeScript</div>
+      <div class="lang-pill" style="opacity:0.5;border-style:dashed">🦀 Rust (coming soon)</div>
+      <div class="lang-pill" style="opacity:0.5;border-style:dashed">☕ Java (coming soon)</div>
+    </div>
+
+    <h3 style="margin-top:48px;margin-bottom:16px;font-size:18px">AI anti-patterns detected (Python)</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:14px">
+      <thead>
+        <tr style="border-bottom:1px solid var(--border)">
+          <th style="padding:8px 12px;text-align:left;color:var(--muted)">Rule</th>
+          <th style="padding:8px 12px;text-align:left;color:var(--muted)">Category</th>
+          <th style="padding:8px 12px;text-align:left;color:var(--muted)">Severity</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom:1px solid var(--border)"><td style="padding:8px 12px"><code>bare-except</code></td><td style="padding:8px 12px;color:var(--muted)">Error handling</td><td style="padding:8px 12px"><span style="color:var(--yellow)">WARNING</span></td></tr>
+        <tr style="border-bottom:1px solid var(--border)"><td style="padding:8px 12px"><code>broad-exception-catch</code></td><td style="padding:8px 12px;color:var(--muted)">Error handling</td><td style="padding:8px 12px"><span style="color:var(--yellow)">WARNING</span></td></tr>
+        <tr style="border-bottom:1px solid var(--border)"><td style="padding:8px 12px"><code>sql-string-format</code></td><td style="padding:8px 12px;color:var(--muted)">Security</td><td style="padding:8px 12px"><span style="color:var(--red)">ERROR</span></td></tr>
+        <tr style="border-bottom:1px solid var(--border)"><td style="padding:8px 12px"><code>shell-injection</code></td><td style="padding:8px 12px;color:var(--muted)">Security</td><td style="padding:8px 12px"><span style="color:var(--red)">ERROR</span></td></tr>
+        <tr style="border-bottom:1px solid var(--border)"><td style="padding:8px 12px"><code>hardcoded-secret-assignment</code></td><td style="padding:8px 12px;color:var(--muted)">Security</td><td style="padding:8px 12px"><span style="color:var(--yellow)">WARNING</span></td></tr>
+        <tr style="border-bottom:1px solid var(--border)"><td style="padding:8px 12px"><code>mutable-default-argument</code></td><td style="padding:8px 12px;color:var(--muted)">Correctness</td><td style="padding:8px 12px"><span style="color:var(--yellow)">WARNING</span></td></tr>
+        <tr style="border-bottom:1px solid var(--border)"><td style="padding:8px 12px"><code>string-concat-in-loop</code></td><td style="padding:8px 12px;color:var(--muted)">Performance</td><td style="padding:8px 12px"><span style="color:var(--yellow)">WARNING</span></td></tr>
+        <tr><td style="padding:8px 12px"><code>unjustified-global</code></td><td style="padding:8px 12px;color:var(--muted)">Design</td><td style="padding:8px 12px"><span style="color:var(--yellow)">WARNING</span></td></tr>
+      </tbody>
+    </table>
+    <p style="margin-top:8px;font-size:13px;color:var(--muted)">
+      + 5 more Python rules, 14 JavaScript/TypeScript rules. <a href="https://github.com/your-org/ai-code-gate/tree/main/semgrep-rules">View all →</a>
+    </p>
+  </div>
+</section>
+
+<!-- ─── Quotes ──────────────────────────────────────── -->
+<section class="section" style="background:var(--surface);border-top:1px solid var(--border)">
+  <div class="section-inner">
+    <div class="section-label">What teams are saying</div>
+    <h2>Built for teams shipping with AI</h2>
+    <div class="quotes">
+      <div class="quote-card">
+        <p class="quote-text">"We were merging Copilot code all day and didn't notice complexity creeping up. AI Code Gate caught three functions over CC=25 in the first week."</p>
+        <div class="quote-author">Platform Engineer</div>
+        <div class="quote-role">Series B fintech, 40-person eng team</div>
+      </div>
+      <div class="quote-card">
+        <p class="quote-text">"The anti-pattern rules for SQL injection caught something our security review had missed. The f-string SQL pattern is exactly what junior devs copy from AI output."</p>
+        <div class="quote-author">Staff Security Engineer</div>
+        <div class="quote-role">E-commerce platform</div>
+      </div>
+      <div class="quote-card">
+        <p class="quote-text">"Coverage was 68% and we thought that was fine. Branch coverage via AI Code Gate showed we were missing every error path. Score went from 61 to 84 in two sprints."</p>
+        <div class="quote-author">Engineering Manager</div>
+        <div class="quote-role">Developer tools startup</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── CTA ──────────────────────────────────────────── -->
+<section class="section" style="text-align:center">
+  <div class="section-inner">
+    <h2>Ready to gate your AI code?</h2>
+    <p style="color:var(--muted);font-size:17px;margin:16px auto 36px;max-width:480px">
+      Free and open source. Works with any Python, JavaScript, or TypeScript repo on GitHub.
+      No sign-up required.
+    </p>
+    <div class="hero-actions">
+      <a href="https://github.com/marketplace/actions/ai-code-gate" class="btn btn-primary">Install GitHub Action →</a>
+      <a href="https://github.com/your-org/ai-code-gate" class="btn btn-secondary">Star on GitHub ⭐</a>
+    </div>
+    <pre style="display:inline-block;margin-top:36px;text-align:left">uses: <span style="color:#79c0ff">your-org/ai-code-gate@v1</span>
+with:
+  threshold: <span style="color:#a5d6ff">"70"</span>
+  languages: <span style="color:#a5d6ff">"python,javascript,typescript"</span></pre>
+  </div>
+</section>
+
+<!-- ─── Footer ──────────────────────────────────────── -->
+<footer>
+  <p>
+    <strong>AI Code Gate</strong> — Open source under the MIT License.
+    &nbsp;·&nbsp;
+    <a href="https://github.com/your-org/ai-code-gate">GitHub</a>
+    &nbsp;·&nbsp;
+    <a href="https://github.com/your-org/ai-code-gate/issues">Issues</a>
+    &nbsp;·&nbsp;
+    <a href="https://github.com/your-org/ai-code-gate/blob/main/README.md">Docs</a>
+  </p>
+</footer>
+
+</body>
+</html>
