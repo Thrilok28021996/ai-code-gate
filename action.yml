@@ -1,6 +1,6 @@
 name: "AI Code Gate"
 description: "Block low-quality AI-generated code from merging. Scores complexity, coverage, and anti-patterns on every PR."
-author: "ai-code-gate"
+author: "Thrilok28021996"
 
 branding:
   icon: "shield"
